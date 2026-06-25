@@ -347,6 +347,10 @@ else
     log "Repository cloned to $APP_DIR"
 fi
 
+info "Making deploy.sh executable..."
+chmod +x "$APP_DIR/deploy.sh"
+log "deploy.sh ready"
+
 # -----------------------------------------------------------------------------
 # 12. Install Node dependencies
 # -----------------------------------------------------------------------------
@@ -409,6 +413,11 @@ log ".env written to $ENV_FILE"
 # 14. PM2 app startup
 # -----------------------------------------------------------------------------
 section "16. PM2 App Startup"
+
+# Grant node permission to bind to port 80 without root
+info "Granting node capability to bind to port 80..."
+sudo setcap 'cap_net_bind_service=+ep' "$(which node)"
+log "cap_net_bind_service granted to node"
 
 info "Starting FestiPatch via PM2..."
 pm2 delete festipatch 2>/dev/null || true
