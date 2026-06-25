@@ -67,6 +67,11 @@ done
 # Persist machine name so MOTD can read it after setup
 echo "$MACHINE_NAME" | sudo tee /etc/festipatch-machine-name > /dev/null
 
+# Derive a valid hostname from machine name (lowercase, spaces to hyphens, strip special chars)
+MACHINE_HOSTNAME=$(echo "$MACHINE_NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-')
+sudo hostnamectl set-hostname "$MACHINE_HOSTNAME"
+log "Hostname set to: $MACHINE_HOSTNAME"
+
 # Prompt for Tailscale auth key
 echo ""
 echo -e "  You need a Tailscale auth key to connect this machine to your account."
@@ -251,7 +256,7 @@ section "9. Firewall (UFW)"
 
 info "Configuring UFW rules..."
 sudo ufw allow OpenSSH
-sudo ufw allow 3001/tcp comment 'FestiPatch app'
+sudo ufw allow 80/tcp comment 'FestiPatch app'
 
 # Dynamically discover all connected non-loopback subnets and allow MySQL from each
 info "Detecting network interfaces for MySQL access rules..."
@@ -281,7 +286,7 @@ sudo systemctl enable tailscaled
 sudo systemctl start tailscaled
 
 info "Connecting to your Tailscale account..."
-sudo tailscale up --authkey="$TAILSCALE_AUTH_KEY" --hostname="festipatch-$(hostname)"
+sudo tailscale up --authkey="$TAILSCALE_AUTH_KEY" --hostname="$MACHINE_HOSTNAME"
 
 log "Tailscale status:"
 tailscale status
@@ -299,7 +304,7 @@ else
     info "Generating SSH key..."
     mkdir -p "$HOME/.ssh"
     chmod 700 "$HOME/.ssh"
-    ssh-keygen -t ed25519 -C "festipatch@$(hostname)" -f "$SSH_KEY_PATH" -N ""
+    ssh-keygen -t ed25519 -C "festipatch@$MACHINE_HOSTNAME" -f "$SSH_KEY_PATH" -N ""
     log "SSH key generated"
 fi
 
@@ -315,7 +320,7 @@ echo ""
 echo -e "  1. Go to: ${BLUE}https://github.com/settings/keys${NC}"
 echo -e "  2. Click 'New SSH key'"
 echo -e "  3. Paste the key above"
-echo -e "  4. Title it: festipatch-$(hostname)"
+echo -e "  4. Title it: $MACHINE_HOSTNAME"
 echo ""
 read -rp "  Press Enter once you have added the key to GitHub..."
 
@@ -345,17 +350,35 @@ fi
 # -----------------------------------------------------------------------------
 # 12. Install Node dependencies
 # -----------------------------------------------------------------------------
-section "13. Node Dependencies"
+section "13. Node Dependencies & Build"
 
-info "Installing npm dependencies..."
+info "Installing server npm dependencies..."
 cd "$APP_DIR/server"
 npm install
-log "npm install complete"
+log "Server npm install complete"
+
+info "Installing client npm dependencies..."
+cd "$APP_DIR/client"
+npm install
+log "Client npm install complete"
+
+info "Building client..."
+npm run build
+log "Client build complete"
 
 # -----------------------------------------------------------------------------
-# 13. Generate .env file
+# 13. Seed database
 # -----------------------------------------------------------------------------
-section "14. Environment File (.env)"
+section "14. Database Seed"
+
+info "Running deploy_fresh.sql..."
+mysql -u "$DB_USER" -p"$DB_PASSWORD" -h 127.0.0.1 "$DB_NAME" < "$APP_DIR/database/deploy_fresh.sql"
+log "Database seeded from deploy_fresh.sql"
+
+# -----------------------------------------------------------------------------
+# 14. Generate .env file
+# -----------------------------------------------------------------------------
+section "15. Environment File (.env)"
 
 JWT_SECRET=$(openssl rand -base64 48 | tr -d '/+=\n' | head -c 48)
 ENV_FILE="$APP_DIR/server/.env"
@@ -366,7 +389,7 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 cat > "$ENV_FILE" << ENV
-PORT=3001
+PORT=80
 DB_HOST=127.0.0.1
 DB_PORT=3306
 DB_NAME=${DB_NAME}
@@ -376,7 +399,7 @@ JWT_SECRET=${JWT_SECRET}
 JWT_EXPIRES_IN=24h
 UPLOAD_DIR=./uploads
 MAX_FILE_SIZE_MB=50
-CLIENT_URL=http://festipatch.local:3001
+CLIENT_URL=http://festipatch.local
 ENV
 
 chmod 600 "$ENV_FILE"
@@ -385,7 +408,7 @@ log ".env written to $ENV_FILE"
 # -----------------------------------------------------------------------------
 # 14. PM2 app startup
 # -----------------------------------------------------------------------------
-section "15. PM2 App Startup"
+section "16. PM2 App Startup"
 
 info "Starting FestiPatch via PM2..."
 pm2 delete festipatch 2>/dev/null || true
@@ -409,7 +432,7 @@ pm2 list
 # -----------------------------------------------------------------------------
 # 15. MySQL automated backups
 # -----------------------------------------------------------------------------
-section "16. MySQL Automated Backups"
+section "17. MySQL Automated Backups"
 
 BACKUP_SCRIPT="/usr/local/bin/festipatch-backup.sh"
 BACKUP_DIR="/var/backups/festipatch"
@@ -462,7 +485,7 @@ log "Hourly backup cron job added"
 # -----------------------------------------------------------------------------
 # 16. Custom MOTD
 # -----------------------------------------------------------------------------
-section "17. MOTD"
+section "18. MOTD"
 
 info "Disabling default Ubuntu MOTD scripts..."
 for f in /etc/update-motd.d/00-header \
@@ -579,7 +602,7 @@ echo -e "  ${BOLD}App .env:${NC}        $ENV_FILE"
 echo -e "  ${BOLD}Backups:${NC}         /var/backups/festipatch/"
 echo -e "  ${BOLD}Backup log:${NC}      /var/log/festipatch-backup.log"
 echo ""
-echo -e "  ${BOLD}App URL:${NC}         ${BLUE}http://festipatch.local:3001${NC}"
+echo -e "  ${BOLD}App URL:${NC}         ${BLUE}http://festipatch.local${NC}"
 echo ""
 echo -e "${GREEN}${BOLD}  All done. Run 'pm2 list' to confirm the app is online.${NC}"
 echo ""
