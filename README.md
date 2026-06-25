@@ -62,7 +62,7 @@ The script runs through the following steps in order:
 | 2 | Installs sudo and adds the festipatch user to sudoers |
 | 3 | Updates system packages |
 | 4 | Installs core dependencies |
-| 5 | Configures mDNS (`festipatch.local`) |
+| 5 | Configures mDNS (`festipatch-XX.local`) |
 | 6 | Installs Node.js LTS |
 | 7 | Installs PM2 |
 | 8 | Installs and configures MySQL |
@@ -86,7 +86,7 @@ During setup the script will generate an SSH key and pause with instructions. Yo
 1. Copy the public key displayed on screen
 2. Go to [github.com/settings/keys](https://github.com/settings/keys)
 3. Click **New SSH key**
-4. Paste the key and title it (e.g. `festipatch-glastonbury`)
+4. Paste the key and title it (e.g. `festipatch-21`)
 5. Press Enter in the terminal to continue
 
 This key is required to clone the private festiPatch repository.
@@ -102,7 +102,7 @@ MySQL Password:  <generated>
 JWT Secret:      <generated>
 App .env:        /var/www/festipatch/server/.env
 Backups:         /var/backups/festipatch/
-App URL:         http://festipatch.local:3001
+App URL:         http://festipatch.local
 ```
 
 Verify the app is running:
