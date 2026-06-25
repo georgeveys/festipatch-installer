@@ -67,6 +67,19 @@ done
 # Persist machine name so MOTD can read it after setup
 echo "$MACHINE_NAME" | sudo tee /etc/festipatch-machine-name > /dev/null
 
+# Prompt for Tailscale auth key
+echo ""
+echo -e "  You need a Tailscale auth key to connect this machine to your account."
+echo -e "  Generate one at: ${BLUE}https://login.tailscale.com/admin/settings/keys${NC}"
+echo -e "  Make sure it is set to ${BOLD}Reusable${NC} so it works for future installs.\n"
+while true; do
+    read -rp "  Enter your Tailscale auth key (tskey-auth-...): " TAILSCALE_AUTH_KEY
+    if [[ "$TAILSCALE_AUTH_KEY" == tskey-auth-* ]]; then
+        break
+    fi
+    warn "Key should start with tskey-auth- — please check and try again."
+done
+
 echo ""
 read -rp "  Press Enter to begin..."
 
@@ -255,9 +268,27 @@ log "UFW enabled with rules:"
 sudo ufw status numbered
 
 # -----------------------------------------------------------------------------
-# 10. SSH Key for GitHub
+# 10. Tailscale
 # -----------------------------------------------------------------------------
-section "10. SSH Key for GitHub"
+section "10. Tailscale"
+
+info "Installing Tailscale..."
+curl -fsSL https://tailscale.com/install.sh | sh
+
+info "Enabling and starting Tailscale service..."
+sudo systemctl enable tailscaled
+sudo systemctl start tailscaled
+
+info "Connecting to your Tailscale account..."
+sudo tailscale up --authkey="$TAILSCALE_AUTH_KEY" --hostname="festipatch-$(hostname)"
+
+log "Tailscale status:"
+tailscale status
+
+# -----------------------------------------------------------------------------
+# 11. SSH Key for GitHub
+# -----------------------------------------------------------------------------
+section "11. SSH Key for GitHub"
 
 SSH_KEY_PATH="$HOME/.ssh/id_ed25519"
 
@@ -294,7 +325,7 @@ log "SSH key step complete"
 # -----------------------------------------------------------------------------
 # 11. Clone FestiPatch repository
 # -----------------------------------------------------------------------------
-section "11. Clone FestiPatch Repository"
+section "12. Clone FestiPatch Repository"
 
 APP_DIR="/var/www/festipatch"
 
@@ -313,7 +344,7 @@ fi
 # -----------------------------------------------------------------------------
 # 12. Install Node dependencies
 # -----------------------------------------------------------------------------
-section "12. Node Dependencies"
+section "13. Node Dependencies"
 
 info "Installing npm dependencies..."
 cd "$APP_DIR/server"
@@ -323,7 +354,7 @@ log "npm install complete"
 # -----------------------------------------------------------------------------
 # 13. Generate .env file
 # -----------------------------------------------------------------------------
-section "13. Environment File (.env)"
+section "14. Environment File (.env)"
 
 JWT_SECRET=$(openssl rand -base64 48 | tr -d '/+=\n' | head -c 48)
 ENV_FILE="$APP_DIR/server/.env"
@@ -353,7 +384,7 @@ log ".env written to $ENV_FILE"
 # -----------------------------------------------------------------------------
 # 14. PM2 app startup
 # -----------------------------------------------------------------------------
-section "14. PM2 App Startup"
+section "15. PM2 App Startup"
 
 info "Starting FestiPatch via PM2..."
 pm2 delete festipatch 2>/dev/null || true
@@ -377,7 +408,7 @@ pm2 list
 # -----------------------------------------------------------------------------
 # 15. MySQL automated backups
 # -----------------------------------------------------------------------------
-section "15. MySQL Automated Backups"
+section "16. MySQL Automated Backups"
 
 BACKUP_SCRIPT="/usr/local/bin/festipatch-backup.sh"
 BACKUP_DIR="/var/backups/festipatch"
@@ -430,7 +461,7 @@ log "Hourly backup cron job added"
 # -----------------------------------------------------------------------------
 # 16. Custom MOTD
 # -----------------------------------------------------------------------------
-section "16. MOTD"
+section "17. MOTD"
 
 info "Disabling default Ubuntu MOTD scripts..."
 for f in /etc/update-motd.d/00-header \

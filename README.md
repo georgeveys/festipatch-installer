@@ -25,6 +25,18 @@ Automated setup script for the festiPatch server. Configures a fresh Ubuntu Serv
 
 ---
 
+## Before you run
+
+You will need a **Tailscale reusable auth key** ready to paste during setup:
+
+1. Go to [login.tailscale.com/admin/settings/keys](https://login.tailscale.com/admin/settings/keys)
+2. Click **Generate auth key**
+3. Tick **Reusable**, leave **Ephemeral** off
+4. Set expiry to suit (or no expiry for a permanent install key)
+5. Copy the key — it starts with `tskey-auth-...`
+
+---
+
 ## How to run
 
 On the fresh machine, log in as the `festipatch` user and run:
@@ -56,6 +68,7 @@ The script runs through the following steps in order:
 | 8 | Installs and configures MySQL |
 | 9 | Creates the festipatch database and user with a generated password |
 | 10 | Configures UFW firewall |
+| 10 | Installs Tailscale and connects to your account using the auth key |
 | 11 | Generates an SSH key and pauses for you to add it to GitHub |
 | 12 | Clones the festiPatch repository |
 | 13 | Installs Node dependencies |
