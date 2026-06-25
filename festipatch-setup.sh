@@ -127,7 +127,8 @@ sudo apt-get install -y \
     avahi-utils \
     libnss-mdns \
     unzip \
-    build-essential
+    build-essential \
+    btop
 log "Core packages installed"
 
 # -----------------------------------------------------------------------------
