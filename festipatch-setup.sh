@@ -487,9 +487,13 @@ sudo chmod +x "$BACKUP_SCRIPT"
 log "Backup script written to $BACKUP_SCRIPT"
 
 # Add hourly cron job for root
-CRON_LINE="0 * * * * $BACKUP_SCRIPT"
-( sudo crontab -l 2>/dev/null | grep -v "$BACKUP_SCRIPT"; echo "$CRON_LINE" ) | sudo crontab -
-log "Hourly backup cron job added"
+# Write cron job directly to /etc/cron.d for reliability
+sudo bash -c "cat > /etc/cron.d/festipatch-backup" << CRONFILE
+# FestiPatch hourly MySQL backup
+0 * * * * root $BACKUP_SCRIPT
+CRONFILE
+sudo chmod 644 /etc/cron.d/festipatch-backup
+log "Hourly backup cron job added to /etc/cron.d/festipatch-backup"
 
 # -----------------------------------------------------------------------------
 # 16. Custom MOTD
