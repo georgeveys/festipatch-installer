@@ -309,9 +309,9 @@ else
 fi
 
 echo ""
-echo -e "${BOLD}${YELLOW}  ┌─────────────────────────────────────────────────────┐${NC}"
-echo -e "${BOLD}${YELLOW}  │  ACTION REQUIRED: Add this public key to GitHub      │${NC}"
-echo -e "${BOLD}${YELLOW}  └─────────────────────────────────────────────────────┘${NC}"
+echo -e "${BOLD}${YELLOW}  +-------------------------------------------------------+${NC}"
+echo -e "${BOLD}${YELLOW}  |  ACTION REQUIRED: Add this public key to GitHub       |${NC}"
+echo -e "${BOLD}${YELLOW}  +-------------------------------------------------------+${NC}"
 echo ""
 echo -e "${BOLD}  Your public key:${NC}"
 echo ""
@@ -542,11 +542,11 @@ RIGHT_PAD=$(( BOX_WIDTH - ${#NAME_LINE} ))
 RIGHT_PAD_STR=$(printf '%*s' "$RIGHT_PAD" '')
 
 echo ""
-echo -e "${BOLD}  ┌─────────────────────────────────────┐${NC}"
-echo -e "${BOLD}  │        festiPatch Server             │${NC}"
-echo -e "${BOLD}  │     Copyright George Veys 2026       │${NC}"
-echo -e "${BOLD}  │${NAME_LINE}${RIGHT_PAD_STR}│${NC}"
-echo -e "${BOLD}  └─────────────────────────────────────┘${NC}"
+echo -e "${BOLD}  +---------------------------------------+${NC}"
+echo -e "${BOLD}  |        festiPatch Server              |${NC}"
+echo -e "${BOLD}  |     Copyright George Veys 2026        |${NC}"
+echo -e "${BOLD}  |${NAME_LINE}${RIGHT_PAD_STR}|${NC}"
+echo -e "${BOLD}  +---------------------------------------+${NC}"
 echo ""
 echo -e "  ${BOLD}Hostname:${NC}  $(hostname)"
 echo -e "  ${BOLD}IP:${NC}        $(hostname -I | awk '{print $1}')"
@@ -576,10 +576,10 @@ RIGHT_PAD_STR=$(printf '%*s' "$RIGHT_PAD" '')
 
 sudo bash -c "cat > /etc/issue" << ISSUE
 
-  ┌─────────────────────────────────────┐
-  │        festiPatch Server             │
-  │     Copyright George Veys 2026       │
-  │${NAME_LINE}${RIGHT_PAD_STR}│
+  +---------------------------------------+
+  |        festiPatch Server              |
+  |     Copyright George Veys 2026        |
+  |${NAME_LINE}${RIGHT_PAD_STR}|
 
   Authorised access only.
 
