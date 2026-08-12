@@ -59,6 +59,17 @@ sudo chmod 600 /etc/netplan/90-festipatch-networkmanager.yaml
 sudo netplan apply
 log "NetworkManager now manages network interfaces"
 
+# systemd-networkd-wait-online.service blocks boot until networkd reports
+# every configured interface online — but nothing is configuring interfaces
+# through networkd anymore now that NetworkManager owns them, so it just
+# waits for a signal that will never come until it times out, stalling
+# every boot. Mask it; NetworkManager-wait-online.service is the equivalent
+# for whatever actually manages the interfaces now.
+info "Masking systemd-networkd-wait-online.service (superseded by NetworkManager)..."
+sudo systemctl disable systemd-networkd-wait-online.service 2>/dev/null || true
+sudo systemctl mask systemd-networkd-wait-online.service
+log "systemd-networkd-wait-online.service masked"
+
 echo -e "  Configure your wired and WiFi connections now."
 echo -e "  Add all networks this machine will need, then select Quit when done.\n"
 read -rp "  Press Enter to open nmtui..."
@@ -616,14 +627,14 @@ else
     STATUS_COLOR=$RED
 fi
 
-MACHINE_NAME=$(cat /etc/festipatch-machine-name 2>/dev/null || echo "Unknown")
+BOX_SUBTITLE=$(hostname)
 
-# Pad machine name to fill the box (box inner width = 37 chars)
+# Pad hostname to fill the box (box inner width = 37 chars)
 BOX_WIDTH=37
-NAME_LEN=${#MACHINE_NAME}
+NAME_LEN=${#BOX_SUBTITLE}
 PADDING=$(( (BOX_WIDTH - NAME_LEN) / 2 ))
 PADDING_STR=$(printf '%*s' "$PADDING" '')
-NAME_LINE="${PADDING_STR}${MACHINE_NAME}"
+NAME_LINE="${PADDING_STR}${BOX_SUBTITLE}"
 # Pad right side to fill box
 RIGHT_PAD=$(( BOX_WIDTH - ${#NAME_LINE} ))
 RIGHT_PAD_STR=$(printf '%*s' "$RIGHT_PAD" '')
@@ -652,12 +663,13 @@ MOTDSCRIPT
 sudo chmod +x "$MOTD_SCRIPT"
 log "Custom MOTD installed"
 
-# Static pre-login banner for TTY (includes machine name)
+# Static pre-login banner for TTY (includes hostname)
+BOX_SUBTITLE=$(hostname)
 BOX_WIDTH=37
-NAME_LEN=${#MACHINE_NAME}
+NAME_LEN=${#BOX_SUBTITLE}
 PADDING=$(( (BOX_WIDTH - NAME_LEN) / 2 ))
 PADDING_STR=$(printf '%*s' "$PADDING" '')
-NAME_LINE="${PADDING_STR}${MACHINE_NAME}"
+NAME_LINE="${PADDING_STR}${BOX_SUBTITLE}"
 RIGHT_PAD=$(( BOX_WIDTH - ${#NAME_LINE} ))
 RIGHT_PAD_STR=$(printf '%*s' "$RIGHT_PAD" '')
 
