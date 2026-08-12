@@ -86,16 +86,36 @@ if ! [[ "$PREFIX" =~ ^[0-9]+$ ]] || [ "$PREFIX" -lt 0 ] || [ "$PREFIX" -gt 32 ];
     exit 1
 fi
 
-# --- Find the primary interface: whichever device currently owns the
-#     default route, falling back to the first ethernet device NetworkManager
-#     knows about if there's no default route at all right now (e.g. DHCP is
-#     already down and nothing has taken over yet). ---
-IFACE=$(ip route show default 2>/dev/null | awk '{print $5; exit}')
+# --- Find the primary interface: the ethernet device among those currently
+#     owning a default route, falling back to the first ethernet device
+#     NetworkManager knows about if none of the current default routes are
+#     ethernet (e.g. DHCP is already down and nothing has taken over yet).
+#     This is deliberately ethernet-only — a box may also have a WiFi
+#     connection (e.g. for updates back at base) that owns a lower-metric
+#     default route than the venue ethernet link; this fallback exists for
+#     the wired connection, so a WiFi route must never make it the target. ---
+IFACE=""
+for dev in $(ip route show default 2>/dev/null | awk '{print $5}'); do
+    if nmcli -t -f DEVICE,TYPE device status 2>/dev/null | grep -Fxq "$dev:ethernet"; then
+        IFACE="$dev"
+        break
+    fi
+done
 if [ -z "$IFACE" ]; then
     IFACE=$(nmcli -t -f DEVICE,TYPE device status 2>/dev/null | awk -F: '$2=="ethernet"{print $1; exit}')
 fi
 if [ -z "$IFACE" ]; then
-    log "ERROR: could not determine a primary network interface — refusing to apply"
+    log "ERROR: could not determine a primary ethernet interface — refusing to apply"
+    exit 1
+fi
+
+# nmcli will happily create/modify a connection profile for a device it
+# doesn't actually control (e.g. netplan's renderer is networkd, the Ubuntu
+# Server default) — the commands below would report success while the
+# profile silently never gets applied. Catch that here instead of failing
+# quietly.
+if nmcli -t -f DEVICE,STATE device status 2>/dev/null | grep -Fxq "$IFACE:unmanaged"; then
+    log "ERROR: $IFACE is unmanaged by NetworkManager — nmcli cannot apply a fallback profile to it. Check /etc/netplan/*.yaml has 'renderer: NetworkManager' and run 'sudo netplan apply'. Refusing to apply."
     exit 1
 fi
 

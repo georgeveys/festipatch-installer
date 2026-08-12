@@ -48,6 +48,17 @@ section "0. Network Configuration"
 info "Installing network-manager if not present..."
 apt-get install -y network-manager 2>/dev/null || sudo apt-get install -y network-manager 2>/dev/null || true
 
+# Ubuntu Server's default netplan renderer is networkd, which leaves every
+# interface "unmanaged" from NetworkManager's point of view — nmtui below,
+# and later festipatch-network-fallback.sh's nmcli calls, would silently
+# have no effect on the actual device even though they report success.
+# Hand netplan's interfaces to NetworkManager so nmcli genuinely controls them.
+info "Switching netplan to the NetworkManager renderer..."
+echo -e "network:\n  version: 2\n  renderer: NetworkManager" | sudo tee /etc/netplan/90-festipatch-networkmanager.yaml > /dev/null
+sudo chmod 600 /etc/netplan/90-festipatch-networkmanager.yaml
+sudo netplan apply
+log "NetworkManager now manages network interfaces"
+
 echo -e "  Configure your wired and WiFi connections now."
 echo -e "  Add all networks this machine will need, then select Quit when done.\n"
 read -rp "  Press Enter to open nmtui..."
