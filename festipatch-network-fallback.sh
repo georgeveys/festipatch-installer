@@ -119,32 +119,77 @@ if nmcli -t -f DEVICE,STATE device status 2>/dev/null | grep -Fxq "$IFACE:unmana
     exit 1
 fi
 
+# Trim the primary DHCP profile's retry count so a genuine DHCP failure is
+# detected in ~45s (one attempt) instead of NetworkManager's default of 4
+# retries (~3 minutes) before it falls through to this fallback profile.
+# Deliberately leaves the per-attempt timeout alone — many managed switches
+# take 20-30s to start forwarding after link-up (Spanning Tree), and cutting
+# the timeout itself risks a false fallback on a DHCP server that would have
+# answered given a normal amount of time. netplan's generated profile name
+# is always "netplan-<ifname>" for a plain interface-name match; skip
+# quietly if that's not what's driving this device (e.g. a non-netplan
+# setup) rather than fail the whole run over a pure timing optimisation.
+DHCP_PROFILE="netplan-${IFACE}"
+if nmcli -t -f NAME connection show 2>/dev/null | grep -Fxq "$DHCP_PROFILE"; then
+    CURRENT_RETRIES=$(nmcli -g connection.autoconnect-retries connection show "$DHCP_PROFILE" 2>/dev/null)
+    if [ "$CURRENT_RETRIES" != "1" ]; then
+        log "Trimming $DHCP_PROFILE's autoconnect-retries to 1 (was '$CURRENT_RETRIES') so a genuine DHCP failure is detected in ~45s instead of ~3 minutes"
+        run nmcli connection modify "$DHCP_PROFILE" connection.autoconnect-retries 1
+    fi
+fi
+
 DESIRED_ADDR="${IP}/${PREFIX}"
+
+# connection.autoconnect-priority only controls which profile NetworkManager
+# picks to activate on THIS device — it has no effect on the kernel's route
+# selection across devices. Without an explicit route-metric, a manual
+# connection defaults to a metric (~100) that can outrank a real, working
+# default route on another interface (e.g. WiFi used for updates back at
+# base) the moment this profile activates, hijacking the box's actual
+# default route into this gateway, which usually leads nowhere. Pin it to a
+# metric worse than any real connection is ever likely to have, so it can
+# only ever provide reachability on its own subnet unless it's genuinely the
+# only interface up at all.
+FALLBACK_ROUTE_METRIC=2000
 
 if profile_exists; then
     CURRENT_ADDR=$(nmcli -g ipv4.addresses connection show "$PROFILE_NAME" 2>/dev/null)
     CURRENT_GW=$(nmcli -g ipv4.gateway connection show "$PROFILE_NAME" 2>/dev/null)
     CURRENT_DEV=$(nmcli -g connection.interface-name connection show "$PROFILE_NAME" 2>/dev/null)
+    CURRENT_METRIC=$(nmcli -g ipv4.route-metric connection show "$PROFILE_NAME" 2>/dev/null)
 
-    if [ "$CURRENT_ADDR" = "$DESIRED_ADDR" ] && [ "$CURRENT_GW" = "$GATEWAY" ] && [ "$CURRENT_DEV" = "$IFACE" ]; then
-        [ "$DRY_RUN" = true ] && log "$PROFILE_NAME already matches desired config ($IFACE $DESIRED_ADDR via $GATEWAY) — nothing to do"
+    if [ "$CURRENT_ADDR" = "$DESIRED_ADDR" ] && [ "$CURRENT_GW" = "$GATEWAY" ] && [ "$CURRENT_DEV" = "$IFACE" ] && [ "$CURRENT_METRIC" = "$FALLBACK_ROUTE_METRIC" ]; then
+        [ "$DRY_RUN" = true ] && log "$PROFILE_NAME already matches desired config ($IFACE $DESIRED_ADDR via $GATEWAY, metric $FALLBACK_ROUTE_METRIC) — nothing to do"
         exit 0
     fi
 
-    log "Existing $PROFILE_NAME profile doesn't match desired config — updating (was: $CURRENT_DEV $CURRENT_ADDR via $CURRENT_GW)"
+    log "Existing $PROFILE_NAME profile doesn't match desired config — updating (was: $CURRENT_DEV $CURRENT_ADDR via $CURRENT_GW, metric $CURRENT_METRIC)"
     run nmcli connection modify "$PROFILE_NAME" \
         connection.interface-name "$IFACE" \
         ipv4.method manual \
         ipv4.addresses "$DESIRED_ADDR" \
         ipv4.gateway "$GATEWAY" \
+        ipv4.route-metric "$FALLBACK_ROUTE_METRIC" \
         connection.autoconnect-priority -10 \
         connection.autoconnect yes
+
+    # `connection modify` only updates the saved profile — if this profile is
+    # already the live connection on the device (i.e. we're already running
+    # on the fallback), the interface keeps using the old address/gateway
+    # until something reactivates it. Without this, a config change made
+    # while already on the fallback would silently not take effect until the
+    # next carrier change or reboot.
+    if nmcli -t -f NAME connection show --active 2>/dev/null | grep -Fxq "$PROFILE_NAME"; then
+        log "$PROFILE_NAME is the live connection on $IFACE — reactivating so the new config takes effect now"
+        run nmcli connection up "$PROFILE_NAME"
+    fi
 else
-    log "Creating $PROFILE_NAME profile on $IFACE ($DESIRED_ADDR via $GATEWAY)"
+    log "Creating $PROFILE_NAME profile on $IFACE ($DESIRED_ADDR via $GATEWAY, metric $FALLBACK_ROUTE_METRIC)"
     run nmcli connection add type ethernet con-name "$PROFILE_NAME" ifname "$IFACE" \
         ipv4.method manual \
         ipv4.addresses "$DESIRED_ADDR" \
         ipv4.gateway "$GATEWAY" \
+        ipv4.route-metric "$FALLBACK_ROUTE_METRIC" \
         connection.autoconnect-priority -10 \
         connection.autoconnect yes
 fi

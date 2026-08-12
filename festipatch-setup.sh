@@ -551,9 +551,17 @@ if [ "$ENABLE_NETWORK_FALLBACK" = true ]; then
     sudo chmod +x "$FALLBACK_SCRIPT"
     log "Fallback script installed to $FALLBACK_SCRIPT"
 
-    printf '# FestiPatch network fallback — checks every 5 min, only ever changes anything if this box'"'"'s normal DHCP connection has actually failed\n*/5 * * * * root %s\n' "$FALLBACK_SCRIPT" | sudo tee /etc/cron.d/festipatch-network-fallback > /dev/null
+    # Two triggers, not one: the */5 tick picks up config changes made while
+    # already running, but its schedule is calendar-aligned, not
+    # boot-relative — after a reboot it can take just under 5 minutes to
+    # fire, which is longer than the ~3 minutes (4 DHCP retries x 45s) it
+    # takes NetworkManager to fall through to the fallback profile. Without
+    # @reboot, a config change saved shortly before a reboot can lose the
+    # race and the box comes up on stale fallback settings. @reboot runs
+    # once as soon as cron itself starts, comfortably ahead of that window.
+    printf '# FestiPatch network fallback — reconciles at boot (ahead of the ~3min DHCP-failure window) and every 5 min after, only ever changing anything if this box'"'"'s normal DHCP connection has actually failed\n@reboot root %s\n*/5 * * * * root %s\n' "$FALLBACK_SCRIPT" "$FALLBACK_SCRIPT" | sudo tee /etc/cron.d/festipatch-network-fallback > /dev/null
     sudo chmod 644 /etc/cron.d/festipatch-network-fallback
-    log "Cron job added to /etc/cron.d/festipatch-network-fallback (runs every 5 minutes as root)"
+    log "Cron job added to /etc/cron.d/festipatch-network-fallback (runs at boot and every 5 minutes as root)"
 
     warn "Network fallback is installed but has nothing to fall back to yet — set the actual fallback IP/prefix/gateway from Admin > Settings > General in the app once it's running."
     warn "Test it by hand first: sudo $FALLBACK_SCRIPT --dry-run (logs to /var/log/festipatch-network-fallback.log)"
