@@ -85,6 +85,19 @@ while true; do
     warn "Key should start with tskey-auth- — please check and try again."
 done
 
+# Prompt for network fallback (optional)
+echo ""
+echo -e "  FestiPatch can fall back to a static IP if this machine ever fails to"
+echo -e "  get a DHCP lease (e.g. a flaky venue network). This only installs the"
+echo -e "  mechanism that watches for it — the actual fallback IP/subnet/gateway"
+echo -e "  are set later from the app's own Admin -> Settings -> General page.\n"
+read -rp "  Enable network fallback support? (y/N): " ENABLE_NETWORK_FALLBACK_INPUT
+if [[ "$ENABLE_NETWORK_FALLBACK_INPUT" =~ ^[Yy]$ ]]; then
+    ENABLE_NETWORK_FALLBACK=true
+else
+    ENABLE_NETWORK_FALLBACK=false
+fi
+
 echo ""
 read -rp "  Press Enter to begin..."
 
@@ -406,6 +419,10 @@ MAX_FILE_SIZE_MB=50
 CLIENT_URL=http://festipatch.local
 ENV
 
+if [ "$ENABLE_NETWORK_FALLBACK" = true ]; then
+    echo "NETWORK_FALLBACK_ENABLED=true" >> "$ENV_FILE"
+fi
+
 chmod 600 "$ENV_FILE"
 log ".env written to $ENV_FILE"
 
@@ -492,9 +509,34 @@ sudo chmod 644 /etc/cron.d/festipatch-backup
 log "Hourly backup cron job added to /etc/cron.d/festipatch-backup"
 
 # -----------------------------------------------------------------------------
+# 18. Network Fallback (optional — see the prompt near the top of this script)
+# -----------------------------------------------------------------------------
+if [ "$ENABLE_NETWORK_FALLBACK" = true ]; then
+    section "18. Network Fallback"
+
+    info "Installing jq (required to parse the fallback config)..."
+    sudo apt-get install -y jq
+
+    FALLBACK_SCRIPT="/usr/local/bin/festipatch-network-fallback.sh"
+    info "Downloading network fallback script..."
+    sudo curl -fsSL https://raw.githubusercontent.com/georgeveys/festipatch-installer/main/festipatch-network-fallback.sh -o "$FALLBACK_SCRIPT"
+    sudo chmod +x "$FALLBACK_SCRIPT"
+    log "Fallback script installed to $FALLBACK_SCRIPT"
+
+    printf '# FestiPatch network fallback — checks every 5 min, only ever changes anything if this box'"'"'s normal DHCP connection has actually failed\n*/5 * * * * root %s\n' "$FALLBACK_SCRIPT" | sudo tee /etc/cron.d/festipatch-network-fallback > /dev/null
+    sudo chmod 644 /etc/cron.d/festipatch-network-fallback
+    log "Cron job added to /etc/cron.d/festipatch-network-fallback (runs every 5 minutes as root)"
+
+    warn "Network fallback is installed but has nothing to fall back to yet — set the actual fallback IP/prefix/gateway from Admin > Settings > General in the app once it's running."
+    warn "Test it by hand first: sudo $FALLBACK_SCRIPT --dry-run (logs to /var/log/festipatch-network-fallback.log)"
+else
+    log "Network fallback support skipped (not requested)"
+fi
+
+# -----------------------------------------------------------------------------
 # 16. Custom MOTD
 # -----------------------------------------------------------------------------
-section "18. MOTD"
+section "19. MOTD"
 
 info "Disabling default Ubuntu MOTD scripts..."
 for f in /etc/update-motd.d/00-header \

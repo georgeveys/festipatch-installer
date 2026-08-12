@@ -13,6 +13,7 @@ Automated setup script for the festiPatch server. Configures a fresh Ubuntu Serv
 - **UFW** — firewall with MySQL access scoped to local LAN interfaces
 - **avahi-daemon** — mDNS so the device is reachable as `festipatch.local`
 - **Automated backups** — hourly MySQL dumps, 7-day retention
+- **Network fallback** *(optional)* — falls back to a static IP if this machine ever fails to get a DHCP lease
 - **Custom MOTD** — shows hostname, IP, uptime, MySQL and app status on login
 
 ---
@@ -75,7 +76,8 @@ The script runs through the following steps in order:
 | 14 | Generates the `.env` file with database credentials and JWT secret |
 | 15 | Starts the app via PM2 and configures boot persistence |
 | 16 | Sets up hourly MySQL backups |
-| 17 | Installs custom MOTD and login banner |
+| 18 | *(optional, if you opted in)* Installs network fallback support |
+| 19 | Installs custom MOTD and login banner |
 
 ---
 
@@ -113,6 +115,29 @@ pm2 list
 
 ---
 
+## Network Fallback
+
+If you answer yes to the "Enable network fallback support?" prompt, the setup script installs `festipatch-network-fallback.sh` to `/usr/local/bin/` and a cron job (`/etc/cron.d/festipatch-network-fallback`) that runs it as root every 5 minutes — same pattern as the hourly MySQL backup.
+
+This installs the *mechanism* only. It has nothing to fall back to until you set an actual fallback IP, prefix, and gateway from the app itself — **Admin → Settings → General → Network Fallback** (only visible there because `NETWORK_FALLBACK_ENABLED=true` was added to `.env` when you opted in). Saving in the app writes `server/network-fallback-config.json`; the cron script reads that file and maintains a low-priority NetworkManager connection profile (`festipatch-fallback-static`) for it.
+
+It's deliberately non-destructive:
+- It never touches the machine's normal DHCP connection or rewrites any existing network config — it only ever adds one *additional*, lower-priority connection profile.
+- NetworkManager itself decides when to use it — it only activates the fallback profile if the DHCP connection genuinely fails to get a lease.
+- Undoing it completely is one command: `sudo nmcli connection delete festipatch-fallback-static` (or just clear the 3 fields in the app and save — the cron script removes the profile on its next run).
+
+Test it by hand before trusting the cron job:
+
+```bash
+sudo /usr/local/bin/festipatch-network-fallback.sh --dry-run
+```
+
+This logs what it *would* do (creating/updating/removing the profile) without actually running any `nmcli` commands. Real output and errors are logged to `/var/log/festipatch-network-fallback.log` either way.
+
+> **Test on spare hardware first.** This changes real network behaviour on a machine you may only have local access to — verify it actually fails over the way you expect before relying on it for a live event.
+
+---
+
 ## Rerunning the script
 
 The script is idempotent for most steps — it checks before installing and skips steps that are already complete. If you need to reconfigure networking, run `sudo nmtui` directly.
@@ -124,7 +149,8 @@ The script is idempotent for most steps — it checks before installing and skip
 ```
 festipatch-installer/
 ├── README.md
-└── festipatch-setup.sh
+├── festipatch-setup.sh
+└── festipatch-network-fallback.sh
 ```
 
 ---
