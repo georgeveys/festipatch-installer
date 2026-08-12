@@ -55,22 +55,22 @@ sudo nmtui
 echo ""
 log "Network configuration complete"
 
-# Prompt for machine name
-while true; do
-    read -rp "  Enter a name for this machine (e.g. 'Glastonbury FOH'): " MACHINE_NAME
-    if [ -n "$MACHINE_NAME" ]; then
-        break
-    fi
-    warn "Machine name cannot be empty."
-done
+# Prompt for mDNS name — this does NOT touch the machine's actual Linux
+# hostname (that's set during the OS installer's own hostname step, before
+# this script ever runs). It only decides what this box answers to on
+# <name>.local, and doubles as the friendly name shown on the Tailscale
+# device list and the login/MOTD banner.
+echo ""
+read -rp "  Enter a name for this machine's mDNS address (press Enter for 'festipatch'): " MACHINE_NAME
+if [ -z "$MACHINE_NAME" ]; then
+    MACHINE_NAME="festipatch"
+fi
 
-# Persist machine name so MOTD can read it after setup
+# Persist (original casing/spacing) so MOTD can read it after setup
 echo "$MACHINE_NAME" | sudo tee /etc/festipatch-machine-name > /dev/null
 
-# Derive a valid hostname from machine name (lowercase, spaces to hyphens, strip special chars)
-MACHINE_HOSTNAME=$(echo "$MACHINE_NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-')
-sudo hostnamectl set-hostname "$MACHINE_HOSTNAME"
-log "Hostname set to: $MACHINE_HOSTNAME"
+# Derive a valid mDNS/Tailscale name from it (lowercase, spaces to hyphens, strip special chars)
+MDNS_NAME=$(echo "$MACHINE_NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-')
 
 # Prompt for Tailscale auth key
 echo ""
@@ -150,14 +150,31 @@ sudo apt-get install -y \
 log "Core packages installed"
 
 # -----------------------------------------------------------------------------
-# 4. mDNS (festipatch.local)
+# 4. mDNS
 # -----------------------------------------------------------------------------
-section "4. mDNS (festipatch.local)"
+section "4. mDNS (${MDNS_NAME}.local)"
+
+info "Installing avahi-daemon..."
+sudo apt-get install -y avahi-daemon 2>/dev/null || true
+
+# Set avahi's own advertised name explicitly, rather than letting it default
+# to the system hostname — this machine's actual Linux hostname is left
+# alone (set during the OS installer's own hostname step), so without this
+# avahi would advertise whatever that unrelated hostname happens to be.
+AVAHI_CONF="/etc/avahi/avahi-daemon.conf"
+if sudo grep -q "^host-name=" "$AVAHI_CONF"; then
+    sudo sed -i "s/^host-name=.*/host-name=${MDNS_NAME}/" "$AVAHI_CONF"
+elif sudo grep -q "^#host-name=" "$AVAHI_CONF"; then
+    sudo sed -i "s/^#host-name=.*/host-name=${MDNS_NAME}/" "$AVAHI_CONF"
+else
+    sudo sed -i "/^\[server\]/a host-name=${MDNS_NAME}" "$AVAHI_CONF"
+fi
+log "avahi host-name set to $MDNS_NAME"
 
 info "Enabling avahi-daemon..."
 sudo systemctl enable avahi-daemon
-sudo systemctl start avahi-daemon
-log "avahi-daemon running — device should be reachable as festipatch.local"
+sudo systemctl restart avahi-daemon
+log "avahi-daemon running — device should be reachable as ${MDNS_NAME}.local"
 
 # -----------------------------------------------------------------------------
 # 5. Node.js (latest LTS via NodeSource)
@@ -299,7 +316,7 @@ sudo systemctl enable tailscaled
 sudo systemctl start tailscaled
 
 info "Connecting to your Tailscale account..."
-sudo tailscale up --authkey="$TAILSCALE_AUTH_KEY" --hostname="$MACHINE_HOSTNAME"
+sudo tailscale up --authkey="$TAILSCALE_AUTH_KEY" --hostname="$MDNS_NAME"
 
 log "Tailscale status:"
 tailscale status
@@ -317,7 +334,7 @@ else
     info "Generating SSH key..."
     mkdir -p "$HOME/.ssh"
     chmod 700 "$HOME/.ssh"
-    ssh-keygen -t ed25519 -C "festipatch@$MACHINE_HOSTNAME" -f "$SSH_KEY_PATH" -N ""
+    ssh-keygen -t ed25519 -C "festipatch@$MDNS_NAME" -f "$SSH_KEY_PATH" -N ""
     log "SSH key generated"
 fi
 
@@ -333,7 +350,7 @@ echo ""
 echo -e "  1. Go to: ${BLUE}https://github.com/settings/keys${NC}"
 echo -e "  2. Click 'New SSH key'"
 echo -e "  3. Paste the key above"
-echo -e "  4. Title it: $MACHINE_HOSTNAME"
+echo -e "  4. Title it: $MDNS_NAME"
 echo ""
 read -rp "  Press Enter once you have added the key to GitHub..."
 
@@ -416,7 +433,7 @@ JWT_SECRET=${JWT_SECRET}
 JWT_EXPIRES_IN=24h
 UPLOAD_DIR=./uploads
 MAX_FILE_SIZE_MB=50
-CLIENT_URL=http://festipatch.local
+CLIENT_URL=http://${MDNS_NAME}.local
 ENV
 
 if [ "$ENABLE_NETWORK_FALLBACK" = true ]; then
@@ -653,7 +670,7 @@ echo -e "  ${BOLD}App .env:${NC}        $ENV_FILE"
 echo -e "  ${BOLD}Backups:${NC}         /var/backups/festipatch/"
 echo -e "  ${BOLD}Backup log:${NC}      /var/log/festipatch-backup.log"
 echo ""
-echo -e "  ${BOLD}App URL:${NC}         ${BLUE}http://festipatch.local${NC}"
+echo -e "  ${BOLD}App URL:${NC}         ${BLUE}http://${MDNS_NAME}.local${NC}"
 echo ""
 echo -e "${GREEN}${BOLD}  All done. Run 'pm2 list' to confirm the app is online.${NC}"
 echo ""

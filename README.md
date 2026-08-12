@@ -11,7 +11,7 @@ Automated setup script for the festiPatch server. Configures a fresh Ubuntu Serv
 - **Node.js** — latest LTS via NodeSource
 - **PM2** — process manager with boot persistence
 - **UFW** — firewall with MySQL access scoped to local LAN interfaces
-- **avahi-daemon** — mDNS so the device is reachable as `festipatch.local`
+- **avahi-daemon** — mDNS so the device is reachable at a name you choose (defaults to `festipatch.local`) — this does not change the machine's actual Linux hostname
 - **Automated backups** — hourly MySQL dumps, 7-day retention
 - **Network fallback** *(optional)* — falls back to a static IP if this machine ever fails to get a DHCP lease
 - **Custom MOTD** — shows hostname, IP, uptime, MySQL and app status on login
@@ -59,11 +59,11 @@ The script runs through the following steps in order:
 | Step | What it does |
 |------|-------------|
 | 0 | Opens nmtui — configure wired and WiFi connections, then quit |
-| 1 | Prompts for a machine name (e.g. `Glastonbury FOH`) displayed on login |
+| 1 | Prompts for an mDNS name (press Enter for `festipatch`) — used for `<name>.local`, the Tailscale device name, and the login banner. Doesn't touch the machine's actual hostname |
 | 2 | Installs sudo and adds the festipatch user to sudoers |
 | 3 | Updates system packages |
 | 4 | Installs core dependencies |
-| 5 | Configures mDNS (`festipatch-XX.local`) |
+| 5 | Configures mDNS at the chosen name |
 | 6 | Installs Node.js LTS |
 | 7 | Installs PM2 |
 | 8 | Installs and configures MySQL |
@@ -104,7 +104,7 @@ MySQL Password:  <generated>
 JWT Secret:      <generated>
 App .env:        /var/www/festipatch/server/.env
 Backups:         /var/backups/festipatch/
-App URL:         http://festipatch.local
+App URL:         http://<your chosen mDNS name>.local   (festipatch.local by default)
 ```
 
 Verify the app is running:
