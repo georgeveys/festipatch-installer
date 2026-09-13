@@ -120,6 +120,36 @@ else
     ENABLE_NETWORK_FALLBACK=false
 fi
 
+# Prompt for database mode (local install vs an existing/remote server)
+echo ""
+echo -e "  FestiPatch needs a MySQL-compatible database. You can let this script"
+echo -e "  install and manage one locally, or point the app at a database server"
+echo -e "  you already run elsewhere (this script will not create the database"
+echo -e "  or user for you in that case — they must already exist).\n"
+read -rp "  Use a remote database server instead of installing one locally? (y/N): " USE_REMOTE_DB_INPUT
+if [[ "$USE_REMOTE_DB_INPUT" =~ ^[Yy]$ ]]; then
+    USE_REMOTE_DB=true
+    echo ""
+    read -rp "  Remote database host or IP: " DB_HOST
+    read -rp "  Remote database port (press Enter for 3306): " DB_PORT
+    DB_PORT=${DB_PORT:-3306}
+    read -rp "  Database name (press Enter for 'festipatch'): " DB_NAME
+    DB_NAME=${DB_NAME:-festipatch}
+    read -rp "  Database user (press Enter for 'festipatch'): " DB_USER
+    DB_USER=${DB_USER:-festipatch}
+    read -rsp "  Database password: " DB_PASSWORD
+    echo ""
+    echo ""
+    warn "Make sure '${DB_NAME}' exists on ${DB_HOST} and that '${DB_USER}' has full"
+    warn "privileges on it, and that the server accepts connections from this machine."
+else
+    USE_REMOTE_DB=false
+    DB_HOST="127.0.0.1"
+    DB_PORT="3306"
+    DB_NAME="festipatch"
+    DB_USER="festipatch"
+fi
+
 echo ""
 read -rp "  Press Enter to begin..."
 
@@ -228,78 +258,129 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# 7. MySQL Server
+# 7. Database Server
 # -----------------------------------------------------------------------------
-section "7. MySQL Server"
+section "7. Database Server"
 
-if systemctl is-active --quiet mysql; then
-    log "MySQL already running"
+if [ "$USE_REMOTE_DB" = true ]; then
+    echo "remote" | sudo tee /etc/festipatch-db-mode > /dev/null
+    log "Using remote database at ${DB_HOST}:${DB_PORT} — skipping local install"
 else
-    info "Installing MySQL Server..."
-    sudo apt-get install -y mysql-server
-    sudo systemctl enable mysql
-    sudo systemctl start mysql
-    log "MySQL installed and started"
+    echo "local" | sudo tee /etc/festipatch-db-mode > /dev/null
+    DB_ENGINE=""
+    if systemctl is-active --quiet mysql || systemctl is-active --quiet mariadb; then
+        log "Database server already running"
+    else
+        info "Installing MySQL Server..."
+        if sudo apt-get install -y mysql-server 2>/dev/null; then
+            DB_ENGINE="mysql"
+        else
+            # Ubuntu occasionally ships a release without an installable
+            # mysql-server candidate (e.g. 24.04 LTS at launch). MariaDB is
+            # the apt-suggested, wire-compatible replacement and Ubuntu
+            # aliases its service/client as mysql, so the rest of this
+            # script's `mysql`/`mysqld.cnf` assumptions still mostly hold.
+            warn "mysql-server has no install candidate on this release — falling back to mariadb-server"
+            sudo apt-get install -y mariadb-server
+            DB_ENGINE="mariadb"
+        fi
+        sudo systemctl enable mysql 2>/dev/null || sudo systemctl enable mariadb
+        sudo systemctl start mysql 2>/dev/null || sudo systemctl start mariadb
+        log "Database server installed and started"
+    fi
+
+    if [ -z "$DB_ENGINE" ]; then
+        if dpkg -l mariadb-server 2>/dev/null | grep -q '^ii'; then
+            DB_ENGINE="mariadb"
+        else
+            DB_ENGINE="mysql"
+        fi
+    fi
+
+    if [ "$DB_ENGINE" = "mysql" ]; then
+        MYSQLD_CNF="/etc/mysql/mysql.conf.d/mysqld.cnf"
+        # Re-enable mysql_native_password (required for mysql2 Node client)
+        info "Configuring MySQL for mysql_native_password compatibility..."
+        if ! sudo grep -q "mysql_native_password" "$MYSQLD_CNF"; then
+            echo "" | sudo tee -a "$MYSQLD_CNF" > /dev/null
+            echo "[mysqld]" | sudo tee -a "$MYSQLD_CNF" > /dev/null
+            echo "mysql_native_password=ON" | sudo tee -a "$MYSQLD_CNF" > /dev/null
+            log "mysql_native_password enabled"
+        else
+            log "mysql_native_password already configured"
+        fi
+    else
+        MYSQLD_CNF="/etc/mysql/mariadb.conf.d/50-server.cnf"
+        log "MariaDB ships mysql_native_password enabled by default — no extra config needed"
+    fi
+
+    # Set bind-address to all interfaces
+    if sudo grep -q "^bind-address" "$MYSQLD_CNF"; then
+        sudo sed -i 's/^bind-address.*/bind-address = 0.0.0.0/' "$MYSQLD_CNF"
+    else
+        echo "bind-address = 0.0.0.0" | sudo tee -a "$MYSQLD_CNF" > /dev/null
+    fi
+    log "Database bind-address set to 0.0.0.0"
+
+    sudo systemctl restart mysql 2>/dev/null || sudo systemctl restart mariadb
+    log "Database server restarted"
 fi
 
-# Re-enable mysql_native_password (required for mysql2 Node client)
-info "Configuring MySQL for mysql_native_password compatibility..."
-MYSQLD_CNF="/etc/mysql/mysql.conf.d/mysqld.cnf"
-
-if ! sudo grep -q "mysql_native_password" "$MYSQLD_CNF"; then
-    echo "" | sudo tee -a "$MYSQLD_CNF" > /dev/null
-    echo "[mysqld]" | sudo tee -a "$MYSQLD_CNF" > /dev/null
-    echo "mysql_native_password=ON" | sudo tee -a "$MYSQLD_CNF" > /dev/null
-    log "mysql_native_password enabled"
-else
-    log "mysql_native_password already configured"
-fi
-
-# Set bind-address to all interfaces
-if sudo grep -q "^bind-address" "$MYSQLD_CNF"; then
-    sudo sed -i 's/^bind-address.*/bind-address = 0.0.0.0/' "$MYSQLD_CNF"
-else
-    echo "bind-address = 0.0.0.0" | sudo tee -a "$MYSQLD_CNF" > /dev/null
-fi
-log "MySQL bind-address set to 0.0.0.0"
-
-sudo systemctl restart mysql
-log "MySQL restarted"
-
 # -----------------------------------------------------------------------------
-# 8. Generate MySQL password and create database/user
+# 8. Database & User
 # -----------------------------------------------------------------------------
-section "8. MySQL Database & User"
+section "8. Database & User"
 
-# Generate a strong random password
-DB_PASSWORD=$(openssl rand -base64 32 | tr -d '/+=\n' | head -c 32)
-DB_NAME="festipatch"
-DB_USER="festipatch"
+if [ "$USE_REMOTE_DB" = true ]; then
+    # Credentials go in a root-only defaults file rather than on the command
+    # line, since -p<password> is visible to any local user via `ps` — and
+    # this file gets reused by the hourly backup cron job below.
+    REMOTE_DB_CNF="/root/.my-festipatch-remote.cnf"
+    info "Writing remote database credentials to ${REMOTE_DB_CNF}..."
+    sudo bash -c "cat > $REMOTE_DB_CNF" << REMOTECNF
+[client]
+host=${DB_HOST}
+port=${DB_PORT}
+user=${DB_USER}
+password=${DB_PASSWORD}
+REMOTECNF
+    sudo chmod 600 "$REMOTE_DB_CNF"
 
-info "Creating database '${DB_NAME}'..."
-sudo mysql -e "CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+    info "Verifying connection to ${DB_NAME}@${DB_HOST}:${DB_PORT}..."
+    if sudo mysql --defaults-extra-file="$REMOTE_DB_CNF" -e "SELECT 1;" "$DB_NAME" &>/dev/null; then
+        log "Connected to remote database successfully"
+    else
+        error "Could not connect to '${DB_NAME}' on ${DB_HOST}:${DB_PORT} as '${DB_USER}'. Check the credentials, that the database/user already exist, and that the remote server allows connections from this host — then re-run the script."
+    fi
+else
+    # Generate a strong random password
+    DB_PASSWORD=$(openssl rand -base64 32 | tr -d '/+=\n' | head -c 32)
 
-info "Creating MySQL user '${DB_USER}'..."
-sudo mysql -e "CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED WITH mysql_native_password BY '${DB_PASSWORD}';"
-sudo mysql -e "CREATE USER IF NOT EXISTS '${DB_USER}'@'%' IDENTIFIED WITH mysql_native_password BY '${DB_PASSWORD}';"
+    info "Creating database '${DB_NAME}'..."
+    sudo mysql -e "CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 
-info "Granting privileges..."
-sudo mysql -e "GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'localhost';"
-sudo mysql -e "GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'%';"
-sudo mysql -e "GRANT PROCESS ON *.* TO '${DB_USER}'@'localhost';"
-sudo mysql -e "GRANT PROCESS ON *.* TO '${DB_USER}'@'%';"
-sudo mysql -e "FLUSH PRIVILEGES;"
-log "Database and user created"
+    info "Creating database user '${DB_USER}'..."
+    sudo mysql -e "CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED WITH mysql_native_password BY '${DB_PASSWORD}';"
+    sudo mysql -e "CREATE USER IF NOT EXISTS '${DB_USER}'@'%' IDENTIFIED WITH mysql_native_password BY '${DB_PASSWORD}';"
 
-# Write root credentials file to avoid password prompts in scripts
-info "Writing /root/.my.cnf..."
-sudo bash -c "cat > /root/.my.cnf" << MYCNF
+    info "Granting privileges..."
+    sudo mysql -e "GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'localhost';"
+    sudo mysql -e "GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'%';"
+    sudo mysql -e "GRANT PROCESS ON *.* TO '${DB_USER}'@'localhost';"
+    sudo mysql -e "GRANT PROCESS ON *.* TO '${DB_USER}'@'%';"
+    sudo mysql -e "FLUSH PRIVILEGES;"
+    log "Database and user created"
+
+    # Write root credentials file to avoid password prompts in scripts
+    info "Writing /root/.my.cnf..."
+    sudo bash -c "cat > /root/.my.cnf" << MYCNF
 [client]
 user=root
 socket=/var/run/mysqld/mysqld.sock
 MYCNF
-sudo chmod 600 /root/.my.cnf
-log "/root/.my.cnf created"
+    sudo chmod 600 /root/.my.cnf
+    log "/root/.my.cnf created"
+fi
 
 # -----------------------------------------------------------------------------
 # 9. UFW Firewall
@@ -311,15 +392,20 @@ sudo ufw allow OpenSSH
 sudo ufw allow 80/tcp comment 'FestiPatch app'
 
 # Dynamically discover all connected non-loopback subnets and allow MySQL from each
-info "Detecting network interfaces for MySQL access rules..."
-ip -o -f inet addr show | grep -v '127\.' | while read -r _ iface _ cidr _; do
-    # cidr is e.g. 10.10.3.106/16 — derive the network address
-    SUBNET=$(python3 -c "import ipaddress; print(ipaddress.ip_interface('${cidr}').network)" 2>/dev/null)
-    if [ -n "$SUBNET" ]; then
-        sudo ufw allow from "$SUBNET" to any port 3306 comment "MySQL LAN ($iface)"
-        log "  MySQL allowed from $SUBNET ($iface)"
-    fi
-done
+# (only relevant when this box is actually running the database)
+if [ "$USE_REMOTE_DB" = true ]; then
+    log "Remote database in use — skipping local MySQL firewall rules"
+else
+    info "Detecting network interfaces for MySQL access rules..."
+    ip -o -f inet addr show | grep -v '127\.' | while read -r _ iface _ cidr _; do
+        # cidr is e.g. 10.10.3.106/16 — derive the network address
+        SUBNET=$(python3 -c "import ipaddress; print(ipaddress.ip_interface('${cidr}').network)" 2>/dev/null)
+        if [ -n "$SUBNET" ]; then
+            sudo ufw allow from "$SUBNET" to any port 3306 comment "MySQL LAN ($iface)"
+            log "  MySQL allowed from $SUBNET ($iface)"
+        fi
+    done
+fi
 
 sudo ufw --force enable
 log "UFW enabled with rules:"
@@ -427,9 +513,24 @@ log "Client build complete"
 # -----------------------------------------------------------------------------
 section "14. Database Seed"
 
-info "Running deploy_fresh.sql..."
-mysql -u "$DB_USER" -p"$DB_PASSWORD" -h 127.0.0.1 "$DB_NAME" < "$APP_DIR/database/deploy_fresh.sql"
-log "Database seeded from deploy_fresh.sql"
+RUN_SEED=true
+if [ "$USE_REMOTE_DB" = true ]; then
+    warn "This will run deploy_fresh.sql against the remote database '${DB_NAME}' on ${DB_HOST}, which can overwrite existing data."
+    read -rp "  Continue? (y/N): " SEED_CONFIRM
+    [[ "$SEED_CONFIRM" =~ ^[Yy]$ ]] || RUN_SEED=false
+fi
+
+if [ "$RUN_SEED" = true ]; then
+    info "Running deploy_fresh.sql..."
+    if [ "$USE_REMOTE_DB" = true ]; then
+        sudo mysql --defaults-extra-file="$REMOTE_DB_CNF" "$DB_NAME" < "$APP_DIR/database/deploy_fresh.sql"
+    else
+        mysql -u "$DB_USER" -p"$DB_PASSWORD" -h "$DB_HOST" -P "$DB_PORT" "$DB_NAME" < "$APP_DIR/database/deploy_fresh.sql"
+    fi
+    log "Database seeded from deploy_fresh.sql"
+else
+    warn "Skipped database seeding"
+fi
 
 # -----------------------------------------------------------------------------
 # 14. Generate .env file
@@ -446,8 +547,8 @@ fi
 
 cat > "$ENV_FILE" << ENV
 PORT=80
-DB_HOST=127.0.0.1
-DB_PORT=3306
+DB_HOST=${DB_HOST}
+DB_PORT=${DB_PORT}
 DB_NAME=${DB_NAME}
 DB_USER=${DB_USER}
 DB_PASSWORD=${DB_PASSWORD}
@@ -505,41 +606,51 @@ BACKUP_LOG="/var/log/festipatch-backup.log"
 
 sudo mkdir -p "$BACKUP_DIR"
 
-sudo bash -c "cat > $BACKUP_SCRIPT" << 'BACKUPSCRIPT'
+# Local installs dump via the socket using /root/.my.cnf. Remote installs
+# reuse the defaults file written in section 8 — credentials stay out of the
+# command line (and so out of `ps`) for this script, which cron runs hourly.
+if [ "$USE_REMOTE_DB" = true ]; then
+    MYSQLDUMP_ARGS="--defaults-extra-file=${REMOTE_DB_CNF}"
+else
+    MYSQLDUMP_ARGS=""
+fi
+
+sudo bash -c "cat > $BACKUP_SCRIPT" << BACKUPSCRIPT
 #!/bin/bash
 BACKUP_DIR="/var/backups/festipatch"
 LOG="/var/log/festipatch-backup.log"
-DB_NAME="festipatch"
-TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-TODAY=$(date +"%Y%m%d")
-FILE="$BACKUP_DIR/${DB_NAME}_${TIMESTAMP}.sql.gz"
+DB_NAME="${DB_NAME}"
+TIMESTAMP=\$(date +"%Y%m%d_%H%M%S")
+TODAY=\$(date +"%Y%m%d")
+FILE="\$BACKUP_DIR/\${DB_NAME}_\${TIMESTAMP}.sql.gz"
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting backup..." >> "$LOG"
+echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Starting backup..." >> "\$LOG"
 
-if mysqldump "$DB_NAME" 2>>"$LOG" | gzip > "$FILE"; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Backup written: $FILE" >> "$LOG"
+if mysqldump ${MYSQLDUMP_ARGS} "\$DB_NAME" 2>>"\$LOG" | gzip > "\$FILE"; then
+    echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Backup written: \$FILE" >> "\$LOG"
 else
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Backup FAILED" >> "$LOG"
+    echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Backup FAILED" >> "\$LOG"
     exit 1
 fi
 
 # Keep all of today's backups, one per previous day, purge after 7 days
-find "$BACKUP_DIR" -name "*.sql.gz" | grep -v "_${TODAY}_" | sort | while read -r f; do
-    DAY=$(basename "$f" | grep -oP '\d{8}')
-    LATEST=$(find "$BACKUP_DIR" -name "*_${DAY}_*.sql.gz" | sort | tail -1)
-    if [ "$f" != "$LATEST" ]; then
-        rm "$f"
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Removed old backup: $f" >> "$LOG"
+find "\$BACKUP_DIR" -name "*.sql.gz" | grep -v "_\${TODAY}_" | sort | while read -r f; do
+    DAY=\$(basename "\$f" | grep -oP '\d{8}')
+    LATEST=\$(find "\$BACKUP_DIR" -name "*_\${DAY}_*.sql.gz" | sort | tail -1)
+    if [ "\$f" != "\$LATEST" ]; then
+        rm "\$f"
+        echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Removed old backup: \$f" >> "\$LOG"
     fi
 done
 
 # Purge anything older than 7 days
-find "$BACKUP_DIR" -name "*.sql.gz" -mtime +7 -exec rm {} \; -exec echo "[$(date '+%Y-%m-%d %H:%M:%S')] Purged: {}" >> "$LOG" \;
+find "\$BACKUP_DIR" -name "*.sql.gz" -mtime +7 -exec rm {} \; -exec echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Purged: {}" >> "\$LOG" \;
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Backup complete." >> "$LOG"
+echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Backup complete." >> "\$LOG"
 BACKUPSCRIPT
 
-sudo chmod +x "$BACKUP_SCRIPT"
+sudo chmod 700 "$BACKUP_SCRIPT"
+sudo chown root:root "$BACKUP_SCRIPT"
 log "Backup script written to $BACKUP_SCRIPT"
 
 # Add hourly cron job for root via /etc/cron.d
@@ -655,7 +766,12 @@ echo -e "  ${BOLD}CPU:${NC}       $(top -bn1 | grep 'Cpu(s)' | awk '{print $2}')
 echo -e "  ${BOLD}Memory:${NC}    $(free -h | awk '/^Mem:/ {print $3 " used of " $2}')"
 echo -e "  ${BOLD}Disk:${NC}      $(df -h / | awk 'NR==2 {print $3 " used of " $4 " (" $5 ")"}')"
 echo ""
-echo -e "  ${BOLD}MySQL:${NC}     $(systemctl is-active mysql)"
+if [ -f /etc/festipatch-db-mode ] && [ "$(cat /etc/festipatch-db-mode)" = "remote" ]; then
+    DB_STATUS="remote"
+else
+    DB_STATUS=$(systemctl is-active mysql 2>/dev/null || systemctl is-active mariadb 2>/dev/null || echo "unknown")
+fi
+echo -e "  ${BOLD}Database:${NC}  ${DB_STATUS}"
 echo -e "  ${BOLD}App:${NC}       ${STATUS_COLOR}${APP_STATUS}${NC}"
 echo ""
 MOTDSCRIPT
@@ -692,9 +808,14 @@ section "Setup Complete"
 
 echo -e "${BOLD}  Credentials (save these securely):${NC}"
 echo ""
-echo -e "  ${BOLD}MySQL Database:${NC}  $DB_NAME"
-echo -e "  ${BOLD}MySQL User:${NC}      $DB_USER"
-echo -e "  ${BOLD}MySQL Password:${NC}  ${YELLOW}$DB_PASSWORD${NC}"
+if [ "$USE_REMOTE_DB" = true ]; then
+    echo -e "  ${BOLD}Database:${NC}       remote — ${DB_HOST}:${DB_PORT}"
+else
+    echo -e "  ${BOLD}Database:${NC}       local"
+fi
+echo -e "  ${BOLD}DB Name:${NC}         $DB_NAME"
+echo -e "  ${BOLD}DB User:${NC}         $DB_USER"
+echo -e "  ${BOLD}DB Password:${NC}     ${YELLOW}$DB_PASSWORD${NC}"
 echo -e "  ${BOLD}JWT Secret:${NC}      ${YELLOW}$JWT_SECRET${NC}"
 echo ""
 echo -e "  ${BOLD}App .env:${NC}        $ENV_FILE"
