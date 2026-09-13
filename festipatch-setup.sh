@@ -334,6 +334,7 @@ if [ "$USE_REMOTE_DB" = true ]; then
     # line, since -p<password> is visible to any local user via `ps` — and
     # this file gets reused by the hourly backup cron job below.
     REMOTE_DB_CNF="/root/.my-festipatch-remote.cnf"
+    DB_VERIFIED=false
 
     for ATTEMPT in 1 2 3; do
         info "Writing remote database credentials to ${REMOTE_DB_CNF}..."
@@ -349,11 +350,17 @@ REMOTECNF
         info "Verifying connection to ${DB_NAME}@${DB_HOST}:${DB_PORT}..."
         if sudo mysql --defaults-extra-file="$REMOTE_DB_CNF" -e "SELECT 1;" "$DB_NAME" &>/dev/null; then
             log "Connected to remote database successfully"
+            DB_VERIFIED=true
             break
         fi
 
         if [ "$ATTEMPT" -eq 3 ]; then
-            error "Could not connect to '${DB_NAME}' on ${DB_HOST}:${DB_PORT} as '${DB_USER}' after 3 attempts. Check the credentials, that the database/user already exist, and that the remote server allows connections from this host — then re-run the script."
+            warn "Could not connect to '${DB_NAME}' on ${DB_HOST}:${DB_PORT} as '${DB_USER}' after 3 attempts."
+            warn "Continuing anyway — the app will not work until this is fixed. Database seeding will be skipped;"
+            warn "fix the credentials/network, edit /var/www/festipatch/server/.env if needed, re-run the seed"
+            warn "(mysql -u <user> -p -h <host> -P <port> <db> < /var/www/festipatch/database/deploy_fresh.sql),"
+            warn "and restart the app with 'pm2 restart festipatch' once the database is reachable."
+            break
         fi
 
         warn "Connection failed (attempt ${ATTEMPT}/3) — re-enter the details below. Press Enter on any field to keep the current value shown."
@@ -531,9 +538,14 @@ section "14. Database Seed"
 
 RUN_SEED=true
 if [ "$USE_REMOTE_DB" = true ]; then
-    warn "This will run deploy_fresh.sql against the remote database '${DB_NAME}' on ${DB_HOST}, which can overwrite existing data."
-    read -rp "  Continue? (y/N): " SEED_CONFIRM
-    [[ "$SEED_CONFIRM" =~ ^[Yy]$ ]] || RUN_SEED=false
+    if [ "$DB_VERIFIED" != true ]; then
+        warn "Skipping database seeding — the remote database connection was never verified."
+        RUN_SEED=false
+    else
+        warn "This will run deploy_fresh.sql against the remote database '${DB_NAME}' on ${DB_HOST}, which can overwrite existing data."
+        read -rp "  Continue? (y/N): " SEED_CONFIRM
+        [[ "$SEED_CONFIRM" =~ ^[Yy]$ ]] || RUN_SEED=false
+    fi
 fi
 
 if [ "$RUN_SEED" = true ]; then
