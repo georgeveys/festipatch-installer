@@ -137,9 +137,7 @@ if [[ "$USE_REMOTE_DB_INPUT" =~ ^[Yy]$ ]]; then
     DB_NAME=${DB_NAME:-festipatch}
     read -rp "  Database user (press Enter for 'festipatch'): " DB_USER
     DB_USER=${DB_USER:-festipatch}
-    read -rsp "  Database password: " DB_PASSWORD
-    echo ""
-    echo ""
+    read -rp "  Database password: " DB_PASSWORD
     warn "Make sure '${DB_NAME}' exists on ${DB_HOST} and that '${DB_USER}' has full"
     warn "privileges on it, and that the server accepts connections from this machine."
 else
@@ -336,22 +334,40 @@ if [ "$USE_REMOTE_DB" = true ]; then
     # line, since -p<password> is visible to any local user via `ps` — and
     # this file gets reused by the hourly backup cron job below.
     REMOTE_DB_CNF="/root/.my-festipatch-remote.cnf"
-    info "Writing remote database credentials to ${REMOTE_DB_CNF}..."
-    sudo bash -c "cat > $REMOTE_DB_CNF" << REMOTECNF
+
+    for ATTEMPT in 1 2 3; do
+        info "Writing remote database credentials to ${REMOTE_DB_CNF}..."
+        sudo bash -c "cat > $REMOTE_DB_CNF" << REMOTECNF
 [client]
 host=${DB_HOST}
 port=${DB_PORT}
 user=${DB_USER}
 password=${DB_PASSWORD}
 REMOTECNF
-    sudo chmod 600 "$REMOTE_DB_CNF"
+        sudo chmod 600 "$REMOTE_DB_CNF"
 
-    info "Verifying connection to ${DB_NAME}@${DB_HOST}:${DB_PORT}..."
-    if sudo mysql --defaults-extra-file="$REMOTE_DB_CNF" -e "SELECT 1;" "$DB_NAME" &>/dev/null; then
-        log "Connected to remote database successfully"
-    else
-        error "Could not connect to '${DB_NAME}' on ${DB_HOST}:${DB_PORT} as '${DB_USER}'. Check the credentials, that the database/user already exist, and that the remote server allows connections from this host — then re-run the script."
-    fi
+        info "Verifying connection to ${DB_NAME}@${DB_HOST}:${DB_PORT}..."
+        if sudo mysql --defaults-extra-file="$REMOTE_DB_CNF" -e "SELECT 1;" "$DB_NAME" &>/dev/null; then
+            log "Connected to remote database successfully"
+            break
+        fi
+
+        if [ "$ATTEMPT" -eq 3 ]; then
+            error "Could not connect to '${DB_NAME}' on ${DB_HOST}:${DB_PORT} as '${DB_USER}' after 3 attempts. Check the credentials, that the database/user already exist, and that the remote server allows connections from this host — then re-run the script."
+        fi
+
+        warn "Connection failed (attempt ${ATTEMPT}/3) — re-enter the details below. Press Enter on any field to keep the current value shown."
+        read -rp "  Remote database host or IP [${DB_HOST}]: " NEW_DB_HOST
+        DB_HOST=${NEW_DB_HOST:-$DB_HOST}
+        read -rp "  Remote database port [${DB_PORT}]: " NEW_DB_PORT
+        DB_PORT=${NEW_DB_PORT:-$DB_PORT}
+        read -rp "  Database name [${DB_NAME}]: " NEW_DB_NAME
+        DB_NAME=${NEW_DB_NAME:-$DB_NAME}
+        read -rp "  Database user [${DB_USER}]: " NEW_DB_USER
+        DB_USER=${NEW_DB_USER:-$DB_USER}
+        read -rp "  Database password (leave blank to keep the current one): " NEW_DB_PASSWORD
+        DB_PASSWORD=${NEW_DB_PASSWORD:-$DB_PASSWORD}
+    done
 else
     # Generate a strong random password
     DB_PASSWORD=$(openssl rand -base64 32 | tr -d '/+=\n' | head -c 32)
